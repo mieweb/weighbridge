@@ -62,6 +62,40 @@ npx github:mieweb/weighbridge
 
 Over a limit? The job fails with exactly which metric and by how much. Either shrink the change — or raise the limit *in the same PR*, where a reviewer sees the weight increase as a conscious, diffable decision instead of silent drift.
 
+## See the trend, not just the number
+
+**In every PR** — the [reference workflow](examples/workflow.yml) posts a sticky comment (updated in place on each push) showing what the PR does to the overall trajectory: a sparkline of recent main-branch weigh-ins with *this PR appended as the would-be next point* (●), the Δ against main, and how much headroom is left before the limit blocks someone:
+
+> | | metric | trend | value | Δ main | limit | headroom |
+> |---|---|---|---|---|---|---|
+> | ✅ | bundle . gzip | `▃▃▄▄▅▅▆` ● | 601 KB | +7.2 KB | 654 KB | 92% |
+> | ✅ | bundle ./tools gzip | `▁▁▁▁▁▁▁` ● | 12.4 KB | ±0 | 15.6 KB | 79% |
+
+A +7 KB bump on a flat line reads very differently from +7 KB on a staircase.
+
+**In your terminal** — sparkline history straight from the weigh-ins branch (repo auto-detected from your git remote):
+
+```text
+$ npx github:mieweb/weighbridge trend
+weighbridge trend — 12 weigh-ins (0.10.0 → 58f5dff)
+
+bundle . gzip        ▃▃▄▄▅▅▆▇█  551.1 KB → 594.2 KB  (+7.8%)
+bundle ./tools gzip  ▁▁▁▁▁▁▁▁▁  12.4 KB → 12.4 KB  (steady)
+pack tarball         ▂▂▂▂▂▂▇██  408.1 KB → 4.13 MB  (+937%)
+```
+
+Flags: `--releases` (release rows only), `--last N`, `--metric <substring>`, `--repo owner/repo`.
+
+**In your README** — the workflow refreshes shields.io endpoint badges on the weigh-ins branch on every main push (green under 80% of limit, yellow near, red over):
+
+```markdown
+![curb weight](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/OWNER/REPO/weigh-ins/badge.json)
+```
+
+Per-metric badges are written too (`badge-bundle-tools-gzip.json`, …).
+
+**On every release** — a “weigh ticket” is stamped into the release notes: each metric, its value, and Δ vs the previous release. Every release page permanently documents what that version weighs.
+
 ## Trending: PRs, main, and releases
 
 The [reference workflow](examples/workflow.yml) adds history on top of the gate:
@@ -87,6 +121,8 @@ git show origin/weigh-ins:weigh-ins.jsonl \
 
 Flags: `--config <path>` (default `weighbridge.json`), `--write-baseline` (snapshot current numbers into `weighbridge-baseline.json` for local Δ comparison).
 
+Subcommands: `trend`, `badges`, `ticket` — see `weighbridge.mjs` header for flags. The gate auto-detects `weighbridge-baseline.json` (Δ column) and `weigh-ins.jsonl` (trend column) in the cwd and writes `weighbridge-summary.md` (the PR-comment/job-summary markdown) alongside the report.
+
 Any metric without a limit is **report-only** — measured, tabled, trended, never failing. RSS after import is always report-only (too runner-noisy to gate).
 
 ## Notes
@@ -94,8 +130,8 @@ Any metric without a limit is **report-only** — measured, tabled, trended, nev
 - Runs **after** your build; it weighs `dist/`, not `src/`.
 - Time limits should be generous (2–3× your laptop): CI runners are slow and shared. The gzip numbers are deterministic — make those the tight ones.
 - `npm pack --dry-run` triggers your `prepare` script (typically a rebuild) — harmless in CI where you just built, a few extra seconds locally.
-- The gate itself needs no permissions. The trending extras in the [reference workflow](examples/workflow.yml) need `contents: write` (weigh-ins branch) and `actions: read` (PR baseline).
-- Add `weighbridge-report.json` and `weighbridge-baseline.json` to your `.gitignore`.
+- The gate itself needs no permissions. The trending extras in the [reference workflow](examples/workflow.yml) need `contents: write` (weigh-ins branch + badges), `actions: read` (PR baseline), and `pull-requests: write` (sticky comment).
+- Add `weighbridge-report.json`, `weighbridge-baseline.json`, `weighbridge-summary.md`, and `weigh-ins.jsonl` to your `.gitignore`.
 
 ---
 

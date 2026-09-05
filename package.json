@@ -1,6 +1,6 @@
 {
   "name": "weighbridge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The scale your npm package crosses before it ships — CI gate and trending for pack size, bundle curb weight, and import/startup time",
   "type": "module",
   "bin": {

@@ -1,5 +1,6 @@
-# Reference workflow: gate on PRs with Δ-vs-main, weigh-in history on a
-# `weigh-ins` branch for main pushes and releases. Copy into
+# Reference workflow: gate on PRs with sparkline trend + Δ-vs-main sticky
+# comment, weigh-in history and badges on a `weigh-ins` branch for main pushes,
+# and a weigh ticket appended to release notes. Copy into
 # .github/workflows/weighbridge.yml and adjust the build steps.
 name: Weighbridge
 
@@ -12,8 +13,9 @@ on:
     types: [ published ]
 
 permissions:
-  contents: write   # weigh-ins branch push (main/release only)
-  actions: read     # baseline artifact download (PRs)
+  contents: write        # weigh-ins branch push (main/release only)
+  actions: read          # baseline artifact download (PRs)
+  pull-requests: write   # sticky weigh-in comment (PRs)
 
 jobs:
   weighbridge:
@@ -32,9 +34,9 @@ jobs:
     - name: Build
       run: npm run build
 
-    # PRs: latest successful main report becomes the baseline so the job
-    # summary shows a Δ-vs-main column for every metric.
-    - name: Fetch baseline from main
+    # PRs: main's latest report becomes the baseline (Δ column) and the
+    # weigh-ins history feeds the sparkline trend column.
+    - name: Fetch baseline and history
       if: github.event_name == 'pull_request'
       env:
         GH_TOKEN: ${{ github.token }}
@@ -47,6 +49,10 @@ jobs:
         else
           echo "no successful main run yet — skipping baseline"
         fi
+        git fetch -q --depth 1 origin weigh-ins 2>/dev/null \
+          && git show FETCH_HEAD:weigh-ins.jsonl > weigh-ins.jsonl \
+          && echo "history: $(wc -l < weigh-ins.jsonl) weigh-ins" \
+          || echo "no weigh-ins history yet"
 
     - name: Weigh-in (curb weight limits)
       uses: mieweb/weighbridge@v1
@@ -58,9 +64,25 @@ jobs:
         name: weighbridge-report
         path: weighbridge-report.json
 
-    # Main pushes + releases: append one weigh-in row to weigh-ins.jsonl on the
-    # weigh-ins branch for permanent, diffable history (artifacts expire).
-    - name: Record weigh-in
+    # PRs: sticky comment (created once, updated in place on later pushes).
+    - name: Post weigh-in comment
+      if: always() && github.event_name == 'pull_request'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        [ -f weighbridge-summary.md ] || exit 0
+        pr=${{ github.event.pull_request.number }}
+        cid=$(gh api "repos/$GITHUB_REPOSITORY/issues/$pr/comments" --paginate \
+          --jq '.[] | select(.body | startswith("<!-- weighbridge -->")) | .id' | head -n1)
+        if [ -n "$cid" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$cid" -F body=@weighbridge-summary.md > /dev/null
+        else
+          gh api "repos/$GITHUB_REPOSITORY/issues/$pr/comments" -F body=@weighbridge-summary.md > /dev/null
+        fi
+
+    # Main pushes + releases: append one weigh-in row to weigh-ins.jsonl and
+    # refresh shields.io endpoint badges on the weigh-ins branch.
+    - name: Record weigh-in and badges
       if: github.event_name == 'push' || github.event_name == 'release'
       env:
         GH_TOKEN: ${{ github.token }}
@@ -84,6 +106,20 @@ jobs:
           git -C "$dir" checkout -q FETCH_HEAD
         fi
         echo "$row" >> "$dir/weigh-ins.jsonl"
-        git -C "$dir" add weigh-ins.jsonl
+        npx -y github:mieweb/weighbridge badges --out "$dir"
+        git -C "$dir" add -A
         git -C "$dir" commit -q -m "weigh-in: ${GITHUB_SHA::7} (${GITHUB_EVENT_NAME} ${GITHUB_REF_NAME})"
         git -C "$dir" push -q origin HEAD:refs/heads/weigh-ins
+
+    # Releases: append the weigh ticket to the release notes.
+    - name: Stamp weigh ticket on release notes
+      if: github.event_name == 'release'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        git fetch -q --depth 1 origin weigh-ins 2>/dev/null \
+          && git show FETCH_HEAD:weigh-ins.jsonl > weigh-ins.jsonl || true
+        npx -y github:mieweb/weighbridge ticket --ref "$GITHUB_REF_NAME" > /tmp/ticket.md
+        gh release view "$GITHUB_REF_NAME" --json body --jq .body > /tmp/notes.md
+        cat /tmp/ticket.md >> /tmp/notes.md
+        gh release edit "$GITHUB_REF_NAME" --notes-file /tmp/notes.md
