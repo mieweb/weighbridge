@@ -1,0 +1,23 @@
+name: weighbridge
+description: >-
+  The scale your npm package crosses before it ships. Gates curb weight against
+  limits in weighbridge.json: pack tarball/unpacked size, per-entry esbuild
+  min+gzip bundle size, fresh-process import time, and command (CLI) startup
+  time. Expects dependencies installed and the package built beforehand.
+branding:
+  icon: anchor
+  color: gray-dark
+inputs:
+  config:
+    description: Path to the weighbridge config file, relative to working-directory.
+    default: weighbridge.json
+  working-directory:
+    description: Directory containing the package to weigh.
+    default: .
+runs:
+  using: composite
+  steps:
+    - name: Weigh package
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: node "$GITHUB_ACTION_PATH/weighbridge.mjs" --config "${{ inputs.config }}"

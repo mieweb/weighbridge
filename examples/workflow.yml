@@ -1,0 +1,89 @@
+# Reference workflow: gate on PRs with Δ-vs-main, weigh-in history on a
+# `weigh-ins` branch for main pushes and releases. Copy into
+# .github/workflows/weighbridge.yml and adjust the build steps.
+name: Weighbridge
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+permissions:
+  contents: write   # weigh-ins branch push (main/release only)
+  actions: read     # baseline artifact download (PRs)
+
+jobs:
+  weighbridge:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 20.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build
+      run: npm run build
+
+    # PRs: latest successful main report becomes the baseline so the job
+    # summary shows a Δ-vs-main column for every metric.
+    - name: Fetch baseline from main
+      if: github.event_name == 'pull_request'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        run_id=$(gh run list --workflow weighbridge.yml --branch main --status success --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+        if [ -n "$run_id" ]; then
+          gh run download "$run_id" -n weighbridge-report -D /tmp/weighbridge-base \
+            && cp /tmp/weighbridge-base/weighbridge-report.json weighbridge-baseline.json \
+            && echo "baseline: main run $run_id" || echo "no baseline artifact on run $run_id"
+        else
+          echo "no successful main run yet — skipping baseline"
+        fi
+
+    - name: Weigh-in (curb weight limits)
+      uses: mieweb/weighbridge@v1
+
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: weighbridge-report
+        path: weighbridge-report.json
+
+    # Main pushes + releases: append one weigh-in row to weigh-ins.jsonl on the
+    # weigh-ins branch for permanent, diffable history (artifacts expire).
+    - name: Record weigh-in
+      if: github.event_name == 'push' || github.event_name == 'release'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        row=$(node -e "
+          const r = JSON.parse(require('fs').readFileSync('weighbridge-report.json','utf8'));
+          console.log(JSON.stringify({
+            date: r.date,
+            sha: process.env.GITHUB_SHA,
+            event: process.env.GITHUB_EVENT_NAME,
+            ref: process.env.GITHUB_REF_NAME,
+            metrics: Object.fromEntries(r.results.map(x => [x.metric, x.value])),
+          }));
+        ")
+        dir=$(mktemp -d)
+        git -C "$dir" init -q
+        git -C "$dir" config user.name 'github-actions[bot]'
+        git -C "$dir" config user.email 'github-actions[bot]@users.noreply.github.com'
+        git -C "$dir" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+        if git -C "$dir" fetch -q --depth 1 origin weigh-ins; then
+          git -C "$dir" checkout -q FETCH_HEAD
+        fi
+        echo "$row" >> "$dir/weigh-ins.jsonl"
+        git -C "$dir" add weigh-ins.jsonl
+        git -C "$dir" commit -q -m "weigh-in: ${GITHUB_SHA::7} (${GITHUB_EVENT_NAME} ${GITHUB_REF_NAME})"
+        git -C "$dir" push -q origin HEAD:refs/heads/weigh-ins

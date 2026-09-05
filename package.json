@@ -1,0 +1,35 @@
+{
+  "name": "weighbridge",
+  "version": "1.0.0",
+  "description": "The scale your npm package crosses before it ships — CI gate and trending for pack size, bundle curb weight, and import/startup time",
+  "type": "module",
+  "bin": {
+    "weighbridge": "./weighbridge.mjs"
+  },
+  "files": [
+    "weighbridge.mjs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mieweb/weighbridge.git"
+  },
+  "homepage": "https://github.com/mieweb/weighbridge#readme",
+  "bugs": {
+    "url": "https://github.com/mieweb/weighbridge/issues"
+  },
+  "keywords": [
+    "bundle-size",
+    "size-limit",
+    "performance-budget",
+    "ci",
+    "github-action",
+    "npm-pack",
+    "import-time",
+    "tree-shaking"
+  ],
+  "author": "Medical Informatics Engineering, LLC",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
