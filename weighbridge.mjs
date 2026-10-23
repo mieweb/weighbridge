@@ -20,7 +20,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, existsSync, appendFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 const args = process.argv.slice(2);
 const sub = args[0] && !args[0].startsWith('-') ? args.shift() : 'gate';
@@ -143,6 +143,66 @@ const record = (metric, value, budget, unit, note = '') => {
   const cap = budget == null ? '' : ` (limit ${unit === 'bytes' ? fmt(budget) : budget + ' ' + unit})`;
   console.log(`${ok ? 'ok  ' : 'OVER'} ${metric}: ${show}${cap}${note ? ` — ${note}` : ''}`);
 };
+
+// Vite's manifest distinguishes startup imports from lazy dynamic imports.
+if (config.vite) {
+  const vite = config.vite;
+  const distDir = resolve(vite.dist ?? 'dist');
+  const manifestPath = resolve(vite.manifest ?? join(vite.dist ?? 'dist', '.vite/manifest.json'));
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`Vite manifest not found: ${manifestPath}`);
+    throw new Error(`Cannot read Vite manifest ${manifestPath}: ${error.message}`);
+  }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error(`Invalid Vite manifest: ${manifestPath}`);
+  }
+
+  const staticChunks = (source) => {
+    const chunks = new Set();
+    const visit = (key) => {
+      if (chunks.has(key)) return;
+      const chunk = manifest[key];
+      if (!chunk) throw new Error(`Vite manifest entry not found for "${key}"`);
+      chunks.add(key);
+      for (const imported of chunk.imports ?? []) visit(imported);
+    };
+    visit(source);
+    return chunks;
+  };
+  const gzipChunks = (chunks) => [...chunks].reduce((total, key) => {
+    const chunk = manifest[key];
+    if (typeof chunk.file !== 'string') throw new Error(`Vite manifest entry "${key}" has no output file`);
+    const outputPath = resolve(distDir, chunk.file);
+    const outputRelative = relative(distDir, outputPath);
+    if (outputRelative.startsWith('..') || isAbsolute(outputRelative)) {
+      throw new Error(`Vite manifest output is outside dist for "${key}": ${chunk.file}`);
+    }
+    let bytes;
+    try {
+      bytes = readFileSync(outputPath);
+    } catch (error) {
+      if (error.code === 'ENOENT') throw new Error(`Vite chunk file not found for "${key}": ${chunk.file}`);
+      throw error;
+    }
+    return total + gzipSync(bytes).length;
+  }, 0);
+
+  const shellEntries = Object.keys(manifest).filter((key) => manifest[key].isEntry);
+  if (!shellEntries.length) throw new Error(`Vite manifest has no isEntry chunks: ${manifestPath}`);
+  const shellChunks = new Set(shellEntries.flatMap((key) => [...staticChunks(key)]));
+  record('app shell gzip', gzipChunks(shellChunks), vite.shell?.maxGzipBytes, 'bytes');
+  for (const route of vite.routes ?? []) {
+    if (!manifest[route.source]) {
+      throw new Error(`Vite route source not found in manifest: ${route.source}`);
+    }
+    const routeChunks = staticChunks(route.source);
+    const beyondShell = new Set([...routeChunks].filter((key) => !shellChunks.has(key)));
+    record(`route ${route.name} gzip`, gzipChunks(beyondShell), route.maxGzipBytes, 'bytes');
+  }
+}
 
 // 1. npm pack size (shipping weight)
 if (config.pack) {
