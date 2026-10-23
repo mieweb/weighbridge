@@ -62,6 +62,37 @@ npx github:mieweb/weighbridge
 
 Over a limit? The job fails with exactly which metric and by how much. Either shrink the change — or raise the limit *in the same PR*, where a reviewer sees the weight increase as a conscious, diffable decision instead of silent drift.
 
+## Weighing a Vite app
+
+Vite builds can be weighed from their build manifest, without re-bundling or configuring hashed output filenames. Enable the manifest in Vite:
+
+```js
+export default {
+  build: { manifest: true },
+};
+```
+
+Then add a `vite` section to `weighbridge.json`:
+
+```json
+{
+  "vite": {
+    "manifest": "dist/.vite/manifest.json",
+    "dist": "dist",
+    "shell": { "maxGzipBytes": 260000 },
+    "routes": [
+      {
+        "name": "clock",
+        "source": "src/features/clock/ClockPage.tsx",
+        "maxGzipBytes": 200000
+      }
+    ]
+  }
+}
+```
+
+`source` is the route's source-path key in the manifest, not its hashed output filename. The `app shell gzip` row includes each `isEntry` chunk and its static imports once. Each `route <name> gzip` row measures only that route's static chunks beyond the shell. Lazy `dynamicImports` are not followed, so moving code behind `import()` does not increase startup weight. Files are gzipped as Vite built them; no esbuild configuration is needed for this mode. As with other measurements, omit a limit to make a row report-only. A missing manifest or source key fails with a message naming the missing path.
+
 ## See the trend, not just the number
 
 **In every PR** — the [reference workflow](examples/workflow.yml) posts a sticky comment (updated in place on each push) showing what the PR does to the overall trajectory: a sparkline of recent main-branch weigh-ins with *this PR appended as the would-be next point* (●), the Δ against main, and how much headroom is left before the limit blocks someone:
@@ -117,6 +148,7 @@ git show origin/weigh-ins:weigh-ins.jsonl \
 | `pack.maxTarballBytes` / `pack.maxUnpackedBytes` | Limits on `npm pack` output |
 | `pack.sections.<name>` | `{ prefix, maxBytes? }` — per-directory shipping weight (e.g. gate `dist/` tightly while a bundled UI is only reported) |
 | `entries[]` | `{ name, path, maxGzipBytes?, maxImportMs?, platform?, external? }` — omit a limit to skip that measurement |
+| `vite` | `{ manifest?, dist?, shell?, routes[] }` — Vite build-manifest startup weights |
 | `commands[]` | `{ name, command: [argv...], maxMs }` |
 
 Flags: `--config <path>` (default `weighbridge.json`), `--write-baseline` (snapshot current numbers into `weighbridge-baseline.json` for local Δ comparison).
